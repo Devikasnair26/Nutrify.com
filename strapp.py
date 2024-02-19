@@ -3,6 +3,7 @@ import pandas as pd
 from azure.core.credentials import AzureKeyCredential
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from openai import AzureOpenAI
+import requests
 
 # Initialize Azure Form Recognizer client
 form_recognizer_endpoint = "https://spjdocumentintelligence.cognitiveservices.azure.com/"
@@ -59,7 +60,7 @@ def extract_summary_from_dataframe(openai_client, df):
 # Function to suggest nutrient intake
 def suggest_nutrient_intake(openai_client, df):
     text = df.to_string(index=False, header=True)
-    prompt = "You are a medical blood test report analyzer and nutrition expert. Suggest nutrients based on test values outside the reference range."
+    prompt = "You are a medical blood test report analyzer and nutrition expert. Suggest nutrients based on test values outside the reference range. Also list the deficient nutrients separately."
     response = openai_client.chat.completions.create(
         model="gpt-4-medical",
         temperature=0.3,
@@ -73,14 +74,58 @@ def suggest_nutrient_intake(openai_client, df):
             {"role": "assistant", "content": f"{text}"}
         ]
     )
-    return response.choices[0].message.content.strip()
+    response_text = response.choices[0].message.content.strip()
+    
+    # Extracting the list of deficient nutrients from the response text
+    deficient_nutrients = extract_deficient_nutrients(response_text)
+    
+    return response_text, deficient_nutrients
+
+# Function to extract deficient nutrients from response text
+def extract_deficient_nutrients(response_text):
+    deficient_nutrients_start_index = response_text.find("Deficient Nutrients:")
+    if deficient_nutrients_start_index != -1:
+        deficient_nutrients_start_index += len("Deficient Nutrients:")
+        deficient_nutrients_end_index = response_text.find("\n", deficient_nutrients_start_index)
+        deficient_nutrients_text = response_text[deficient_nutrients_start_index:deficient_nutrients_end_index]
+        deficient_nutrients = [nutrient.strip() for nutrient in deficient_nutrients_text.split(",")]
+        return deficient_nutrients
+    else:
+        return []
+
+# Function to get nutrients from ingredients, filtering only those listed as deficient
+def get_nutrients(ingredients, deficient_nutrients):
+    api_key = 'e109e1ac122ce462cd08ef2b1477f786'
+    api_id = 'da7e6685'
+    api_endpint = 'https://api.edamam.com/api/nutrition-details'
+    url = api_endpint + '?app_id=' + api_id +'&app_key=' + api_key
+    headers = {
+        'Content-Type':'application/json'}
+    recipe = {
+        'title': 'Something',
+        'ingr' : [ingredients]}
+    r = requests.post(url, headers=headers, json=recipe)
+    if r.ok == True:
+        df = pd.DataFrame(r.json()['totalNutrients']).transpose()
+        
+        # Filter the DataFrame to include only nutrients listed as deficient
+        df_filtered = df[df.index.isin(deficient_nutrients)]
+        
+        return df_filtered
+    else:
+        print('Ops! It seems there is a typing mistake in your ingredients! Check the example provided above!')
 
 # Streamlit app
 def main():
     st.title("NUTRIFY ME!")
+    with open('style.css') as f:
+        css = f.read()
 
-    # Create a multi-page layout using Streamlit
-    page = st.sidebar.radio("Navigation", ["Upload PDF", "About App"])
+    st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
+
+    # Upload PDF directly in the main page
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio("", ["Blood Report Analysis", "Get Nutrients", "About App"])
 
     if page == "Upload PDF":
         st.sidebar.title("Upload PDF")
@@ -101,11 +146,29 @@ def main():
                 st.write(summary)
 
                 st.subheader("Nutrient Intake Suggestions")
-                nutrient_intake = suggest_nutrient_intake(openai_client, df)
+                nutrient_intake, deficient_nutrients = suggest_nutrient_intake(openai_client, df)
                 st.markdown(f"**Nutrient Intake Suggestions:**\n{nutrient_intake}")
+
+                # Store deficient nutrients for later use
+                st.session_state['deficient_nutrients'] = deficient_nutrients
 
             else:
                 st.warning("No table found in the uploaded PDF.")
+
+    elif page == "Get Nutrients":
+        st.title("Get Nutrients from Ingredients")
+        ingredients = st.text_input("Enter ingredients with its unit. Such as 100ml milk, 40g bread etc.")
+        if ingredients:
+            deficient_nutrients = st.session_state.get('deficient_nutrients', [])
+            if deficient_nutrients:
+                nutrients = get_nutrients(ingredients, deficient_nutrients)
+                if nutrients is not None:
+                    st.subheader("Nutrients from Ingredients")
+                    st.dataframe(nutrients)
+                else:
+                    st.warning("Failed to retrieve nutrients from provided ingredients.")
+            else:
+                st.warning("No deficient nutrients available. Please upload a PDF and analyze to get nutrient intake suggestions first.")
 
     elif page == "About App":
         st.title("About the App")
