@@ -123,11 +123,10 @@ def main():
 
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
-    # Upload PDF directly in the main page
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio("", ["Blood Report Analysis", "Get Nutrients", "About App"])
+    # Create a multi-page layout using Streamlit
+    page = st.sidebar.radio("Navigation", ["Blood Report Analysis", "Get Nutrients", "About App"])
 
-    if page == "Upload PDF":
+    if page == "Blood Report Analysis":
         st.sidebar.title("Upload PDF")
         uploaded_file = st.sidebar.file_uploader("", type=["pdf"])
 
